@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>カラーコード転送 送信側</title>
+<style>
+:root{--bg:#fff;--fg:#111;--mut:#666;--card:#f2f2f5;--ac:#2563eb;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#111;--fg:#eee;--mut:#9a9a9a;--card:#1e1e22;--ac:#60a5fa}}
+:root[data-theme="dark"]{--bg:#111;--fg:#eee;--mut:#9a9a9a;--card:#1e1e22;--ac:#60a5fa}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 -apple-system,"Hiragino Sans",sans-serif}
+main{max-width:760px;margin:0 auto;padding:16px}
+h1{font-size:20px;margin:8px 0 12px}
+.card{background:var(--card);border-radius:12px;padding:14px;margin-bottom:12px}
+label{display:block;font-size:14px;color:var(--mut);margin-top:8px}
+input[type=range],select{width:100%;font:inherit}
+button{font:inherit;border:0;border-radius:10px;padding:12px 18px;background:var(--ac);color:#fff;width:100%;margin-top:10px}
+button.sub{background:transparent;color:var(--ac);border:1px solid var(--ac)}
+canvas{display:block;margin:0 auto;image-rendering:pixelated}
+#st{text-align:center;font-size:14px;color:var(--mut);margin-top:8px}
+</style>
+</head>
+<body>
+<main>
+<h1>カラーコード転送 送信側</h1>
+<div class="card">
+<input type="file" id="f" multiple>
+<label>密度（セル数。大きいほど1コマで多く送れるが、受信カメラに高解像度が必要）</label>
+<select id="g"><option>48</option><option>64</option><option selected>80</option><option>96</option><option>112</option><option>128</option></select>
+<div id="cap" style="font-size:14px;color:var(--mut)"></div>
+<label>表示速度: <b id="fpv">8</b> コマ/秒</label>
+<input type="range" id="fp" min="2" max="20" value="8">
+<button id="go">送信開始</button>
+<button id="stop" class="sub" style="display:none">停止</button>
+<div id="info" style="font-size:14px;color:var(--mut);margin-top:8px"></div>
+</div>
+<div class="card" id="view" style="display:none"><canvas id="c"></canvas><div id="st"></div></div>
+<p style="font-size:13px;color:var(--mut)">複数ファイルは自動でzipにします。画面の明るさを最大にし、受信カメラにコード全体が大きく映るようにしてください。全コマを繰り返し表示するので取りこぼしは次の周回で補われます。</p>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+// ==CODEC==
+const NSYM=32,EXP=new Uint8Array(512),LOG=new Uint8Array(256);
+(()=>{let x=1;for(let i=0;i<255;i++){EXP[i]=x;LOG[x]=i;x<<=1;if(x&256)x^=0x11d}for(let i=255;i<512;i++)EXP[i]=EXP[i-255]})();
+const mul=(a,b)=>a&&b?EXP[LOG[a]+LOG[b]]:0;
+const GEN=(()=>{let g=[1];for(let i=0;i<NSYM;i++){const n=new Array(g.length+1).fill(0);for(let j=0;j<g.length;j++){n[j]^=g[j];n[j+1]^=mul(g[j],EXP[i])}g=n}return g})();
+function rsEnc(m){const o=new Uint8Array(m.length+NSYM);o.set(m);for(let i=0;i<m.length;i++){const c=o[i];if(c)for(let j=1;j<GEN.length;j++)o[i+j]^=mul(GEN[j],c)}o.set(m);return o}
+function crc16(a){let c=0;for(const b of a){c^=b<<8;for(let i=0;i<8;i++)c=c&0x8000?((c<<1)^0x1021)&0xFFFF:(c<<1)&0xFFFF}return c}
+function layout(G){const nsym=G*G-72,nb=Math.floor(nsym*3/8/255);return{nsym,nb,D:nb*223,L:Math.ceil(nsym*3/8)}}
+function whiten(b){let x=0x9E3779B9;for(let i=0;i<b.length;i++){x=(x^(x<<13))>>>0;x=(x^(x>>>17))>>>0;x=(x^(x<<5))>>>0;b[i]^=(x>>>8)&255}}
+function frameCells(G,sid,idx,total,payload){
+  const{nsym,nb,D,L}=layout(G);
+  const p=new Uint8Array(D);p.set(payload);
+  const buf=new Uint8Array(L);
+  for(let j=0;j<nb;j++){const blk=rsEnc(p.subarray(j*223,(j+1)*223));for(let k=0;k<255;k++)buf[k*nb+j]=blk[k]}
+  whiten(buf);
+  const cells=new Uint8Array(G*G);
+  for(let k=0;k<8;k++)cells[k]=k;
+  const h=new Uint8Array([sid>>8,sid&255,idx>>8,idx&255,total>>8,total&255,0,0]);
+  const c=crc16(h.subarray(0,6));h[6]=c>>8;h[7]=c&255;
+  for(let i=0;i<64;i++)cells[8+i]=((h[i>>3]>>(7-(i&7)))&1)?7:0;
+  for(let t=0;t<nsym;t++){let s=0;for(let b=0;b<3;b++){const q=3*t+b;s=(s<<1)|((buf[q>>3]>>(7-(q&7)))&1)}cells[72+t]=s}
+  return cells;
+}
+// ==/CODEC==
+const $=id=>document.getElementById(id);
+const PAL=[0,1,2,3,4,5,6,7].map(k=>'rgb('+((k>>2)&1)*255+','+((k>>1)&1)*255+','+(k&1)*255+')');
+let data,G,sid,total,idx,loops,timer,metaBytes,D;
+function showCap(){const l=layout(+$('g').value);$('cap').textContent='1コマ '+l.D+' バイト（QR比 約'+(l.D/500).toFixed(1)+'倍）'}
+$('g').onchange=showCap;showCap();
+$('fp').oninput=()=>$('fpv').textContent=$('fp').value;
+function draw(cells){
+  const T=G+8,dpr=window.devicePixelRatio||1,cp=Math.max(2,Math.floor(Math.min(innerWidth-32,720)*dpr/T)),c=$('c');
+  c.width=c.height=cp*T;c.style.width=c.style.height=(cp*T/dpr)+'px';
+  const g=c.getContext('2d');
+  g.fillStyle='#fff';g.fillRect(0,0,c.width,c.height);
+  g.fillStyle='#000';g.fillRect(2*cp,2*cp,(G+4)*cp,(G+4)*cp);
+  g.fillStyle='#fff';g.fillRect(3*cp,3*cp,(G+2)*cp,(G+2)*cp);
+  g.fillStyle='#000';g.fillRect(4*cp,4*cp,G*cp,G*cp);
+  for(let i=0;i<G*G;i++){const k=cells[i];if(!k)continue;g.fillStyle=PAL[k];g.fillRect((4+i%G)*cp,(4+(i/G|0))*cp,cp,cp)}
+}
+async function start(){
+  const fs=[...$('f').files];
+  if(!fs.length){$('info').textContent='ファイルを選んでください';return}
+  $('info').textContent='準備中…';
+  let name;
+  if(fs.length===1){name=fs[0].name;data=new Uint8Array(await fs[0].arrayBuffer())}
+  else{const z=new JSZip(),used={};for(const f of fs){let n=f.name,k=1;while(used[n])n=(k++)+'_'+f.name;used[n]=1;z.file(n,f)}
+    data=await z.generateAsync({type:'uint8array',compression:'DEFLATE'});name='files_'+Date.now()+'.zip'}
+  const h=new Uint8Array(await crypto.subtle.digest('SHA-256',data));
+  G=+$('g').value;D=layout(G).D;
+  total=1+Math.ceil(data.length/D);
+  sid=Math.floor(Math.random()*65536);
+  metaBytes=new TextEncoder().encode(JSON.stringify({n:name,s:data.length,h:[...h].map(b=>b.toString(16).padStart(2,'0')).join('')}));
+  idx=0;loops=0;
+  const fps=+$('fp').value;
+  $('info').textContent=name+'（'+(data.length/1024).toFixed(1)+' KB / '+total+'コマ / 1周 約'+(total/fps).toFixed(1)+'秒）';
+  $('view').style.display='block';$('stop').style.display='block';$('go').style.display='none';
+  timer=setInterval(()=>{
+    const pl=idx===0?metaBytes:data.subarray((idx-1)*D,idx*D);
+    draw(frameCells(G,sid,idx,total,pl));
+    $('st').textContent='コマ '+(idx+1)+' / '+total+'　周回 '+(loops+1);
+    if(++idx>=total){idx=0;loops++}
+  },1000/fps);
+}
+function stop(){clearInterval(timer);$('stop').style.display='none';$('go').style.display='block';$('view').style.display='none'}
+$('go').onclick=start;$('stop').onclick=stop;
+</script>
+</body>
+</html>
