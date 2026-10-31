@@ -19,6 +19,10 @@ button{font:inherit;border:0;border-radius:10px;padding:12px 18px;background:var
 button.sub{background:transparent;color:var(--ac);border:1px solid var(--ac)}
 canvas{display:block;margin:0 auto;image-rendering:pixelated}
 #st{text-align:center;font-size:14px;color:var(--mut);margin-top:8px}
+.mut{font-size:14px;color:var(--mut);margin-top:8px}
+.row{display:flex;gap:8px;align-items:center;justify-content:center;margin-top:10px}
+.row button{width:auto;margin:0;padding:10px 16px}
+#num{width:5.5em;font:inherit;text-align:center;padding:8px}
 </style>
 </head>
 <body>
@@ -26,17 +30,23 @@ canvas{display:block;margin:0 auto;image-rendering:pixelated}
 <h1>カラーコード転送 送信側</h1>
 <div class="card">
 <input type="file" id="f" multiple>
+<div id="info" class="mut"></div>
 <label>密度（セル数。大きいほど1コマで多く送れるが、受信カメラに高解像度が必要）</label>
 <select id="g"><option>48</option><option>64</option><option selected>80</option><option>96</option><option>112</option><option>128</option></select>
-<div id="cap" style="font-size:14px;color:var(--mut)"></div>
 <label>表示速度: <b id="fpv">8</b> コマ/秒</label>
 <input type="range" id="fp" min="2" max="20" value="8">
-<button id="go">送信開始</button>
-<button id="stop" class="sub" style="display:none">停止</button>
-<div id="info" style="font-size:14px;color:var(--mut);margin-top:8px"></div>
+<div id="cap" class="mut" style="white-space:pre-line"></div>
 </div>
-<div class="card" id="view" style="display:none"><canvas id="c"></canvas><div id="st"></div></div>
-<p style="font-size:13px;color:var(--mut)">複数ファイルは自動でzipにします。画面の明るさを最大にし、受信カメラにコード全体が大きく映るようにしてください。全コマを繰り返し表示するので取りこぼしは次の周回で補われます。</p>
+<div class="card" id="view" style="display:none">
+<canvas id="c"></canvas>
+<div id="st"></div>
+<div class="row"><button class="sub" id="prev">◀</button><input type="number" id="num" min="1" value="1" inputmode="numeric"><span id="tot"></span><button class="sub" id="next">▶</button></div>
+<button id="go">自動送信（ループ）</button>
+<button id="stop" class="sub" style="display:none">停止</button>
+<button id="save" class="sub">このコマを画像として保存</button>
+<div id="saved" style="display:none"><img id="img" alt="" style="max-width:100%;margin-top:10px"><div class="mut">画像を長押し（PCは右クリック）して保存してください</div></div>
+</div>
+<p class="mut">番号を入力するとそのコマを表示して止まります（コマ1はファイル情報）。複数ファイルは自動でzipにします。全コマをループ表示するので、取りこぼしは次の周回で補われます。</p>
 </main>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script>
@@ -66,46 +76,67 @@ function frameCells(G,sid,idx,total,payload){
 // ==/CODEC==
 const $=id=>document.getElementById(id);
 const PAL=[0,1,2,3,4,5,6,7].map(k=>'rgb('+((k>>2)&1)*255+','+((k>>1)&1)*255+','+(k&1)*255+')');
-let data,G,sid,total,idx,loops,timer,metaBytes,D;
-function showCap(){const l=layout(+$('g').value);$('cap').textContent='1コマ '+l.D+' バイト（QR比 約'+(l.D/500).toFixed(1)+'倍）'}
-$('g').onchange=showCap;showCap();
-$('fp').oninput=()=>$('fpv').textContent=$('fp').value;
-function draw(cells){
+let prep=null,G=80,D=0,total=0,sid=0,cur=0,loops=0,timer=null;
+const newSid=()=>{sid=Math.floor(Math.random()*65536)};
+function info(){
+  G=+$('g').value;D=layout(G).D;
+  total=prep?1+Math.ceil(prep.data.length/D):0;
+  let t='1コマ '+D.toLocaleString()+' バイト（QR比 約'+(D/500).toFixed(1)+'倍）';
+  if(prep)t+='\n合計 '+total+' コマ（ファイル情報1＋データ'+(total-1)+'）／ 1周 約'+(total/+$('fp').value).toFixed(1)+'秒';
+  $('cap').textContent=t;$('num').max=total||1;$('tot').textContent='/ '+(total||'-');
+}
+function draw(cells,i){
   const T=G+8,dpr=window.devicePixelRatio||1,cp=Math.max(2,Math.floor(Math.min(innerWidth-32,720)*dpr/T)),c=$('c');
-  c.width=c.height=cp*T;c.style.width=c.style.height=(cp*T/dpr)+'px';
+  c.width=cp*T;c.height=cp*(T+3);c.style.width=(cp*T/dpr)+'px';c.style.height=(cp*(T+3)/dpr)+'px';
   const g=c.getContext('2d');
   g.fillStyle='#fff';g.fillRect(0,0,c.width,c.height);
   g.fillStyle='#000';g.fillRect(2*cp,2*cp,(G+4)*cp,(G+4)*cp);
   g.fillStyle='#fff';g.fillRect(3*cp,3*cp,(G+2)*cp,(G+2)*cp);
   g.fillStyle='#000';g.fillRect(4*cp,4*cp,G*cp,G*cp);
-  for(let i=0;i<G*G;i++){const k=cells[i];if(!k)continue;g.fillStyle=PAL[k];g.fillRect((4+i%G)*cp,(4+(i/G|0))*cp,cp,cp)}
+  for(let k=0;k<G*G;k++){const v=cells[k];if(!v)continue;g.fillStyle=PAL[v];g.fillRect((4+k%G)*cp,(4+(k/G|0))*cp,cp,cp)}
+  g.fillStyle='#000';g.font='bold '+Math.floor(cp*2.2)+'px sans-serif';g.textAlign='center';g.textBaseline='middle';
+  g.fillText((i+1)+' / '+total,c.width/2,(T+1.5)*cp);
 }
-async function start(){
+function show(i){
+  if(!prep)return;
+  cur=Math.max(0,Math.min(total-1,i));
+  const pl=cur===0?prep.meta:prep.data.subarray((cur-1)*D,cur*D);
+  draw(frameCells(G,sid,cur,total,pl),cur);
+  if(document.activeElement!==$('num'))$('num').value=cur+1;
+  $('st').textContent='コマ '+(cur+1)+' / '+total+(cur===0?'（ファイル情報）':'')+(timer?'　周回 '+(loops+1):'');
+}
+function play(){
+  if(!prep||timer)return;
+  loops=0;timer=setInterval(()=>{const n=(cur+1)%total;if(n===0)loops++;show(n)},1000/+$('fp').value);
+  $('go').style.display='none';$('stop').style.display='block';
+}
+function stop(){
+  clearInterval(timer);timer=null;
+  $('go').style.display='block';$('stop').style.display='none';show(cur);
+}
+$('f').onchange=async()=>{
+  stop();prep=null;$('view').style.display='none';
   const fs=[...$('f').files];
-  if(!fs.length){$('info').textContent='ファイルを選んでください';return}
+  if(!fs.length){$('info').textContent='';info();return}
   $('info').textContent='準備中…';
-  let name;
+  let name,data;
   if(fs.length===1){name=fs[0].name;data=new Uint8Array(await fs[0].arrayBuffer())}
   else{const z=new JSZip(),used={};for(const f of fs){let n=f.name,k=1;while(used[n])n=(k++)+'_'+f.name;used[n]=1;z.file(n,f)}
     data=await z.generateAsync({type:'uint8array',compression:'DEFLATE'});name='files_'+Date.now()+'.zip'}
   const h=new Uint8Array(await crypto.subtle.digest('SHA-256',data));
-  G=+$('g').value;D=layout(G).D;
-  total=1+Math.ceil(data.length/D);
-  sid=Math.floor(Math.random()*65536);
-  metaBytes=new TextEncoder().encode(JSON.stringify({n:name,s:data.length,h:[...h].map(b=>b.toString(16).padStart(2,'0')).join('')}));
-  idx=0;loops=0;
-  const fps=+$('fp').value;
-  $('info').textContent=name+'（'+(data.length/1024).toFixed(1)+' KB / '+total+'コマ / 1周 約'+(total/fps).toFixed(1)+'秒）';
-  $('view').style.display='block';$('stop').style.display='block';$('go').style.display='none';
-  timer=setInterval(()=>{
-    const pl=idx===0?metaBytes:data.subarray((idx-1)*D,idx*D);
-    draw(frameCells(G,sid,idx,total,pl));
-    $('st').textContent='コマ '+(idx+1)+' / '+total+'　周回 '+(loops+1);
-    if(++idx>=total){idx=0;loops++}
-  },1000/fps);
-}
-function stop(){clearInterval(timer);$('stop').style.display='none';$('go').style.display='block';$('view').style.display='none'}
-$('go').onclick=start;$('stop').onclick=stop;
+  const meta=new TextEncoder().encode(JSON.stringify({n:name,s:data.length,h:[...h].map(b=>b.toString(16).padStart(2,'0')).join('')}));
+  prep={name,data,meta};
+  $('info').textContent=name+'（'+(data.length/1024).toFixed(1)+' KB'+(fs.length>1?'・'+fs.length+'ファイルをzip化':'')+'）';
+  newSid();cur=0;info();$('view').style.display='block';show(0);
+};
+$('g').onchange=()=>{info();if(prep){newSid();show(cur)}};
+$('fp').oninput=()=>{$('fpv').textContent=$('fp').value;info();if(timer){clearInterval(timer);timer=null;play()}};
+$('num').onchange=()=>{stop();show((+$('num').value||1)-1)};
+$('prev').onclick=()=>{stop();show(cur-1)};
+$('next').onclick=()=>{stop();show(cur+1)};
+$('go').onclick=play;$('stop').onclick=stop;
+$('save').onclick=()=>{stop();$('img').src=$('c').toDataURL('image/png');$('saved').style.display='block';$('saved').scrollIntoView({behavior:'smooth'})};
+info();
 </script>
 </body>
 </html>
