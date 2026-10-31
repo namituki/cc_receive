@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>カラーコード転送 送信側</title>
+<title>転送 送信側</title>
 <style>
 :root{--bg:#fff;--fg:#111;--mut:#666;--card:#f2f2f5;--ac:#2563eb;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#111;--fg:#eee;--mut:#9a9a9a;--card:#1e1e22;--ac:#60a5fa}}
@@ -23,32 +23,38 @@ canvas{display:block;margin:0 auto;image-rendering:pixelated}
 .row{display:flex;gap:8px;align-items:center;justify-content:center;margin-top:10px}
 .row button{width:auto;margin:0;padding:10px 16px}
 #num{width:5.5em;font:inherit;text-align:center;padding:8px}
+.aim{position:relative;width:120px;height:90px;margin:8px auto;background:#000;border-radius:6px;overflow:hidden}
+.aim video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+.box{position:absolute;left:30%;top:30%;width:40%;height:40%;border:2px solid #ff0}
 </style>
 </head>
 <body>
 <main>
-<h1>カラーコード転送 送信側</h1>
+<h1>転送 送信側</h1>
 <div class="card">
 <input type="file" id="f" multiple>
 <div id="info" class="mut"></div>
-<label>密度（セル数。大きいほど1コマで多く送れるが、受信カメラに高解像度が必要）</label>
-<select id="g"><option>48</option><option>64</option><option selected>80</option><option>96</option><option>112</option><option>128</option></select>
-<label>表示速度: <b id="fpv">8</b> コマ/秒</label>
-<input type="range" id="fp" min="2" max="20" value="8">
+<label>コードの種類</label>
+<select id="md"><option value="c8" selected>カラー 8色（最高密度）</option><option value="c4">カラー 4色（読み取り安定）</option><option value="c2">白黒 2色（カラーより安定）</option><option value="qr">QRコード</option></select>
+<div id="gw"><label>密度（セル数。大きいほど1コマで多く送れるが、受信カメラに高解像度が必要）</label><select id="g"><option>48</option><option>64</option><option selected>80</option><option>96</option><option>112</option><option>128</option></select></div>
+<div id="qw" style="display:none"><label>1コマのバイト数（小さいほど読みやすい）</label><select id="qs"><option>200</option><option>300</option><option selected>500</option><option>700</option><option>900</option></select></div>
+<label>送信方式</label>
+<select id="pm"><option value="ack" selected>カメラ確認（受信側の信号を見て次へ）</option><option value="loop">ループ（受信側の信号なし）</option></select>
+<div id="spw" style="display:none"><label>表示速度: <b id="fpv">8</b> コマ/秒</label><input type="range" id="fp" min="2" max="20" value="8"></div>
 <div id="cap" class="mut" style="white-space:pre-line"></div>
 </div>
 <div class="card" id="view" style="display:none">
 <canvas id="c"></canvas>
 <div id="st"></div>
+<div id="aimw" style="display:none"><div class="aim"><video id="vid" playsinline muted></video><div class="box"></div></div><div id="ack" class="mut" style="text-align:center;white-space:pre-line"></div></div>
 <div class="row"><button class="sub" id="prev">◀</button><input type="number" id="num" min="1" value="1" inputmode="numeric"><span id="tot"></span><button class="sub" id="next">▶</button></div>
-<button id="go">自動送信（ループ）</button>
+<button id="go">送信開始</button>
 <button id="stop" class="sub" style="display:none">停止</button>
 <button id="save" class="sub">このコマを画像として保存</button>
 <div id="saved" style="display:none"><img id="img" alt="" style="max-width:100%;margin-top:10px"><div class="mut">画像を長押し（PCは右クリック）して保存してください</div></div>
 </div>
-<p class="mut">番号を入力するとそのコマを表示して止まります（コマ1はファイル情報）。複数ファイルは自動でzipにします。全コマをループ表示するので、取りこぼしは次の周回で補われます。</p>
+<p class="mut">カメラ確認: 受信側の「ack」ウィンドウ（緑／紫に変わる）が黄色い枠の中いっぱいに映るようにカメラを向けてください。コマ1はファイル情報です。複数ファイルは自動でzipにします。</p>
 </main>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script>
 // ==CODEC==
 const NSYM=32,EXP=new Uint8Array(512),LOG=new Uint8Array(256);
@@ -57,62 +63,115 @@ const mul=(a,b)=>a&&b?EXP[LOG[a]+LOG[b]]:0;
 const GEN=(()=>{let g=[1];for(let i=0;i<NSYM;i++){const n=new Array(g.length+1).fill(0);for(let j=0;j<g.length;j++){n[j]^=g[j];n[j+1]^=mul(g[j],EXP[i])}g=n}return g})();
 function rsEnc(m){const o=new Uint8Array(m.length+NSYM);o.set(m);for(let i=0;i<m.length;i++){const c=o[i];if(c)for(let j=1;j<GEN.length;j++)o[i+j]^=mul(GEN[j],c)}o.set(m);return o}
 function crc16(a){let c=0;for(const b of a){c^=b<<8;for(let i=0;i<8;i++)c=c&0x8000?((c<<1)^0x1021)&0xFFFF:(c<<1)&0xFFFF}return c}
-function layout(G){const nsym=G*G-72,nb=Math.floor(nsym*3/8/255);return{nsym,nb,D:nb*223,L:Math.ceil(nsym*3/8)}}
+const SYM={1:[0,7],2:[0,3,5,6],3:[0,1,2,3,4,5,6,7]};
+function layout(G,bpc){const nsym=G*G-72,nb=Math.floor(nsym*bpc/8/255);return{nsym,nb,D:nb*223,L:Math.ceil(nsym*bpc/8)}}
 function whiten(b){let x=0x9E3779B9;for(let i=0;i<b.length;i++){x=(x^(x<<13))>>>0;x=(x^(x>>>17))>>>0;x=(x^(x<<5))>>>0;b[i]^=(x>>>8)&255}}
-function frameCells(G,sid,idx,total,payload){
-  const{nsym,nb,D,L}=layout(G);
+function frameCells(G,bpc,sid,idx,total,payload){
+  const{nsym,nb,D,L}=layout(G,bpc);
   const p=new Uint8Array(D);p.set(payload);
   const buf=new Uint8Array(L);
   for(let j=0;j<nb;j++){const blk=rsEnc(p.subarray(j*223,(j+1)*223));for(let k=0;k<255;k++)buf[k*nb+j]=blk[k]}
   whiten(buf);
   const cells=new Uint8Array(G*G);
   for(let k=0;k<8;k++)cells[k]=k;
-  const h=new Uint8Array([sid>>8,sid&255,idx>>8,idx&255,total>>8,total&255,0,0]);
+  const tf=((bpc-1)<<14)|total;
+  const h=new Uint8Array([sid>>8,sid&255,idx>>8,idx&255,tf>>8,tf&255,0,0]);
   const c=crc16(h.subarray(0,6));h[6]=c>>8;h[7]=c&255;
   for(let i=0;i<64;i++)cells[8+i]=((h[i>>3]>>(7-(i&7)))&1)?7:0;
-  for(let t=0;t<nsym;t++){let s=0;for(let b=0;b<3;b++){const q=3*t+b;s=(s<<1)|((buf[q>>3]>>(7-(q&7)))&1)}cells[72+t]=s}
+  for(let t=0;t<nsym;t++){let s=0;for(let b=0;b<bpc;b++){const q=bpc*t+b;s=(s<<1)|((buf[q>>3]>>(7-(q&7)))&1)}cells[72+t]=SYM[bpc][s]}
   return cells;
 }
 // ==/CODEC==
 const $=id=>document.getElementById(id);
-const PAL=[0,1,2,3,4,5,6,7].map(k=>'rgb('+((k>>2)&1)*255+','+((k>>1)&1)*255+','+(k&1)*255+')');
-let prep=null,G=80,D=0,total=0,sid=0,cur=0,loops=0,timer=null;
+const QRL='https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js',ZL='https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+const loaded={};
+const lib=u=>loaded[u]||(loaded[u]=new Promise((ok,ng)=>{const s=document.createElement('script');s.src=u;s.onload=ok;s.onerror=ng;document.head.appendChild(s)}));
+let prep=null,mode='c8',bpc=3,G=80,D=0,total=0,sid=0,cur=0,loops=0,timer=null,bad='',cam=null,camT=null,okN=0,shownAt=0,run=null;
 const newSid=()=>{sid=Math.floor(Math.random()*65536)};
+const sc=document.createElement('canvas');sc.width=16;sc.height=12;const sctx=sc.getContext('2d',{willReadFrequently:true});
+const off=document.createElement('canvas');
+function b64(u8){let s='';for(let i=0;i<u8.length;i+=0x8000)s+=String.fromCharCode.apply(null,u8.subarray(i,i+0x8000));return btoa(s)}
 function info(){
-  G=+$('g').value;D=layout(G).D;
-  total=prep?1+Math.ceil(prep.data.length/D):0;
-  let t='1コマ '+D.toLocaleString()+' バイト（QR比 約'+(D/500).toFixed(1)+'倍）';
-  if(prep)t+='\n合計 '+total+' コマ（ファイル情報1＋データ'+(total-1)+'）／ 1周 約'+(total/+$('fp').value).toFixed(1)+'秒';
+  mode=$('md').value;
+  $('gw').style.display=mode==='qr'?'none':'block';$('qw').style.display=mode==='qr'?'block':'none';
+  $('spw').style.display=$('pm').value==='loop'?'block':'none';
+  if(mode==='qr'){D=+$('qs').value;bpc=0}else{bpc={c8:3,c4:2,c2:1}[mode];G=+$('g').value;D=layout(G,bpc).D}
+  total=prep?1+Math.ceil(prep.data.length/D):0;bad='';
+  if(prep&&prep.meta.length>D)bad='ファイル名が長すぎます。密度／バイト数を上げてください';
+  else if(prep&&mode!=='qr'&&total>16383)bad='コマ数が多すぎます（上限16383）。密度を上げてください';
+  let t='1コマ '+D.toLocaleString()+' バイト'+(mode==='qr'?'':'（QR 500B比 約'+(D/500).toFixed(1)+'倍）');
+  if(prep)t+='\n合計 '+total+' コマ（ファイル情報1＋データ'+(total-1)+'）'+($('pm').value==='loop'?'／ 1周 約'+(total/+$('fp').value).toFixed(1)+'秒':'');
+  if(bad)t+='\n⚠ '+bad;
   $('cap').textContent=t;$('num').max=total||1;$('tot').textContent='/ '+(total||'-');
 }
-function draw(cells,i){
-  const T=G+8,dpr=window.devicePixelRatio||1,cp=Math.max(2,Math.floor(Math.min(innerWidth-32,720)*dpr/T)),c=$('c');
+function setup(T){
+  const dpr=window.devicePixelRatio||1,cp=Math.max(2,Math.floor(Math.min(innerWidth-32,720)*dpr/T)),c=$('c');
   c.width=cp*T;c.height=cp*(T+3);c.style.width=(cp*T/dpr)+'px';c.style.height=(cp*(T+3)/dpr)+'px';
-  const g=c.getContext('2d');
-  g.fillStyle='#fff';g.fillRect(0,0,c.width,c.height);
-  g.fillStyle='#000';g.fillRect(2*cp,2*cp,(G+4)*cp,(G+4)*cp);
-  g.fillStyle='#fff';g.fillRect(3*cp,3*cp,(G+2)*cp,(G+2)*cp);
-  g.fillStyle='#000';g.fillRect(4*cp,4*cp,G*cp,G*cp);
-  for(let k=0;k<G*G;k++){const v=cells[k];if(!v)continue;g.fillStyle=PAL[v];g.fillRect((4+k%G)*cp,(4+(k/G|0))*cp,cp,cp)}
-  g.fillStyle='#000';g.font='bold '+Math.floor(cp*2.2)+'px sans-serif';g.textAlign='center';g.textBaseline='middle';
-  g.fillText((i+1)+' / '+total,c.width/2,(T+1.5)*cp);
+  const g=c.getContext('2d');g.imageSmoothingEnabled=false;g.fillStyle='#fff';g.fillRect(0,0,c.width,c.height);
+  return[g,cp,c];
+}
+function label(g,c,T,cp){g.fillStyle='#000';g.font='bold '+Math.floor(cp*2.2)+'px sans-serif';g.textAlign='center';g.textBaseline='middle';g.fillText((cur+1)+' / '+total,c.width/2,(T+1.5)*cp)}
+function blit(g,n,px,cp,x){off.width=off.height=n;off.getContext('2d').putImageData(new ImageData(px,n,n),0,0);g.drawImage(off,0,0,n,n,x*cp,x*cp,n*cp,n*cp)}
+function drawColor(cells){
+  const T=G+8,[g,cp,c]=setup(T);
+  g.fillStyle='#000';g.fillRect(2*cp,2*cp,(G+4)*cp,(G+4)*cp);g.fillStyle='#fff';g.fillRect(3*cp,3*cp,(G+2)*cp,(G+2)*cp);
+  const px=new Uint8ClampedArray(G*G*4);
+  for(let k=0;k<G*G;k++){const v=cells[k];px[4*k]=(v>>2&1)*255;px[4*k+1]=(v>>1&1)*255;px[4*k+2]=(v&1)*255;px[4*k+3]=255}
+  blit(g,G,px,cp,4);label(g,c,T,cp);
+}
+function drawQR(pl){
+  const q=qrcode(0,'L');q.addData('QT1|'+sid+'|'+cur+'|'+total+'|'+b64(pl));q.make();
+  const n=q.getModuleCount(),T=n+8,[g,cp,c]=setup(T),px=new Uint8ClampedArray(n*n*4);
+  for(let r=0;r<n;r++)for(let k=0;k<n;k++){const p=4*(r*n+k),v=q.isDark(r,k)?0:255;px[p]=px[p+1]=px[p+2]=v;px[p+3]=255}
+  blit(g,n,px,cp,4);label(g,c,T,cp);
 }
 function show(i){
-  if(!prep)return;
-  cur=Math.max(0,Math.min(total-1,i));
+  if(!prep||bad)return;
+  cur=Math.max(0,Math.min(total-1,i));shownAt=Date.now();okN=0;
   const pl=cur===0?prep.meta:prep.data.subarray((cur-1)*D,cur*D);
-  draw(frameCells(G,sid,cur,total,pl),cur);
+  if(mode==='qr'){if(!window.qrcode)return;drawQR(pl)}else drawColor(frameCells(G,bpc,sid,cur,total,pl));
   if(document.activeElement!==$('num'))$('num').value=cur+1;
-  $('st').textContent='コマ '+(cur+1)+' / '+total+(cur===0?'（ファイル情報）':'')+(timer?'　周回 '+(loops+1):'');
+  $('st').textContent='コマ '+(cur+1)+' / '+total+(cur===0?'（ファイル情報）':'')+(run==='loop'?'　周回 '+(loops+1):'');
 }
-function play(){
-  if(!prep||timer)return;
-  loops=0;timer=setInterval(()=>{const n=(cur+1)%total;if(n===0)loops++;show(n)},1000/+$('fp').value);
-  $('go').style.display='none';$('stop').style.display='block';
+function loopTimer(){clearInterval(timer);timer=setInterval(()=>{const n=(cur+1)%total;if(n===0)loops++;show(n)},1000/+$('fp').value)}
+async function camStart(){
+  try{cam=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:160},height:{ideal:120},frameRate:{ideal:10,max:15}},audio:false})}
+  catch(e){$('ack').textContent='カメラを使えません（'+(e.name||e)+'）。ループ方式を使うか、このページを単独のタブで開いてください';return false}
+  const v=$('vid');v.srcObject=cam;await v.play();camT=setInterval(sample,120);return true;
 }
-function stop(){
-  clearInterval(timer);timer=null;
-  $('go').style.display='block';$('stop').style.display='none';show(cur);
+function camStop(){clearInterval(camT);camT=null;if(cam){cam.getTracks().forEach(t=>t.stop());cam=null}$('vid').srcObject=null}
+function sample(){
+  const v=$('vid');if(run!=='ack'||!v.videoWidth)return;
+  const w=v.videoWidth,h=v.videoHeight;
+  sctx.drawImage(v,w*.3,h*.3,w*.4,h*.4,0,0,16,12);
+  const d=sctx.getImageData(0,0,16,12).data;let a=0,b=0;
+  for(let k=0;k<d.length;k+=4){
+    const r=d[k],g=d[k+1],bl=d[k+2],mx=Math.max(r,g,bl),mn=Math.min(r,g,bl);
+    if(mx<90||mx-mn<mx*.45)continue;
+    if(g>=r*1.25&&g>=bl*1.25)a++;
+    else{const lo=Math.min(r,bl);if(g<=lo*.6&&lo>=Math.max(r,bl)*.5)b++}
+  }
+  const n=192,st=a>n*.55&&b<n*.1?1:b>n*.55&&a<n*.1?2:0,want=cur%2?2:1,wait=Date.now()-shownAt;
+  if(wait>700&&st===want){if(++okN>=4){okN=0;next();return}}else okN=0;
+  $('ack').textContent='受信側の信号: '+['なし','緑','紫'][st]+'　期待: '+['','緑','紫'][want]+'　確認 '+okN+'/4　待機 '+(wait/1000|0)+'秒'+(wait>10000?'\n⚠ 受信できない場合は密度を下げるか、白黒／QRにしてください':'');
+}
+function next(){
+  if(cur>=total-1){const n=total;stop();$('st').textContent='転送完了 ✓（全 '+n+' コマ、最後の確認が取れました）';return}
+  show(cur+1);
+}
+async function start(){
+  if(!prep||bad||run)return;
+  if(mode==='qr'&&!window.qrcode)await lib(QRL);
+  if($('pm').value==='ack'){$('aimw').style.display='block';if(!await camStart())return;run='ack'}
+  else{loops=0;run='loop';loopTimer()}
+  btn();show(cur);
+}
+function stop(){clearInterval(timer);timer=null;camStop();run=null;$('aimw').style.display='none';btn();show(cur)}
+function btn(){$('go').style.display=run?'none':'block';$('stop').style.display=run?'block':'none'}
+async function cfg(){
+  stop();newSid();
+  if(mode==='qr'||$('md').value==='qr'){try{await lib(QRL)}catch(e){$('info').textContent='QRライブラリを読み込めません'}}
+  info();show(cur);
 }
 $('f').onchange=async()=>{
   stop();prep=null;$('view').style.display='none';
@@ -121,20 +180,20 @@ $('f').onchange=async()=>{
   $('info').textContent='準備中…';
   let name,data;
   if(fs.length===1){name=fs[0].name;data=new Uint8Array(await fs[0].arrayBuffer())}
-  else{const z=new JSZip(),used={};for(const f of fs){let n=f.name,k=1;while(used[n])n=(k++)+'_'+f.name;used[n]=1;z.file(n,f)}
+  else{await lib(ZL);const z=new JSZip(),used={};for(const f of fs){let n=f.name,k=1;while(used[n])n=(k++)+'_'+f.name;used[n]=1;z.file(n,f)}
     data=await z.generateAsync({type:'uint8array',compression:'DEFLATE'});name='files_'+Date.now()+'.zip'}
   const h=new Uint8Array(await crypto.subtle.digest('SHA-256',data));
-  const meta=new TextEncoder().encode(JSON.stringify({n:name,s:data.length,h:[...h].map(b=>b.toString(16).padStart(2,'0')).join('')}));
-  prep={name,data,meta};
+  prep={name,data,meta:new TextEncoder().encode(JSON.stringify({n:name,s:data.length,h:[...h].map(b=>b.toString(16).padStart(2,'0')).join('')}))};
   $('info').textContent=name+'（'+(data.length/1024).toFixed(1)+' KB'+(fs.length>1?'・'+fs.length+'ファイルをzip化':'')+'）';
-  newSid();cur=0;info();$('view').style.display='block';show(0);
+  cur=0;$('view').style.display='block';await cfg();
 };
-$('g').onchange=()=>{info();if(prep){newSid();show(cur)}};
-$('fp').oninput=()=>{$('fpv').textContent=$('fp').value;info();if(timer){clearInterval(timer);timer=null;play()}};
+$('md').onchange=cfg;$('g').onchange=cfg;$('qs').onchange=cfg;
+$('pm').onchange=()=>{stop();info()};
+$('fp').oninput=()=>{$('fpv').textContent=$('fp').value;info();if(run==='loop')loopTimer()};
 $('num').onchange=()=>{stop();show((+$('num').value||1)-1)};
 $('prev').onclick=()=>{stop();show(cur-1)};
 $('next').onclick=()=>{stop();show(cur+1)};
-$('go').onclick=play;$('stop').onclick=stop;
+$('go').onclick=start;$('stop').onclick=stop;
 $('save').onclick=()=>{stop();$('img').src=$('c').toDataURL('image/png');$('saved').style.display='block';$('saved').scrollIntoView({behavior:'smooth'})};
 info();
 </script>
